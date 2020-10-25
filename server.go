@@ -19,12 +19,15 @@ var sessionStore *session.Store
 
 func main() {
 
+	serverAddress := ":8080"
+
 	var err error
 	webAuthn, err = webauthn.New(&webauthn.Config{
-		RPDisplayName: "Foobar Corp.",     // Display Name for your site
-		RPID:          "localhost",        // Generally the domain name for your site
-		RPOrigin:      "http://localhost", // The origin URL for WebAuthn requests
-		// RPIcon: "https://duo.com/logo.png", // Optional icon URL for your site
+		RPDisplayName: "Foobar Corp.",                      // Display Name for your site
+		RPID:          "localhost",                         // Generally the domain name for your site
+		RPOrigin:      "https://localhost" + serverAddress, // The origin URL for WebAuthn requests
+		// RPIcon: "https://duo.com/logo.png",              // Optional icon URL for your site
+		// AttestationPreference: protocol.PreferDirectAttestation,
 	})
 
 	if err != nil {
@@ -45,11 +48,13 @@ func main() {
 	r.HandleFunc("/login/begin/{username}", BeginLogin).Methods("GET")
 	r.HandleFunc("/login/finish/{username}", FinishLogin).Methods("POST")
 
+	r.HandleFunc("/txauthn/begin/{username}", BeginTxAuthn).Methods("POST")
+	r.HandleFunc("/txauthn/finish/{username}", FinishTxAuthn).Methods("POST")
+
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./")))
 
-	serverAddress := ":8080"
 	log.Println("starting server at", serverAddress)
-	log.Fatal(http.ListenAndServe(serverAddress, r))
+	log.Fatal(http.ListenAndServeTLS(serverAddress, "server.crt", "server.key", r))
 }
 
 func BeginRegistration(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +86,9 @@ func BeginRegistration(w http.ResponseWriter, r *http.Request) {
 		registerOptions,
 	)
 
+	// ADDED
+	fmt.Printf("%+v\n", options.Response.User.CredentialEntity.Name)
+
 	if err != nil {
 		log.Println(err)
 		jsonResponse(w, err.Error(), http.StatusInternalServerError)
@@ -99,7 +107,6 @@ func BeginRegistration(w http.ResponseWriter, r *http.Request) {
 }
 
 func FinishRegistration(w http.ResponseWriter, r *http.Request) {
-
 	// get username
 	vars := mux.Vars(r)
 	username := vars["username"]
@@ -133,8 +140,7 @@ func FinishRegistration(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, "Registration Success", http.StatusOK)
 }
 
-func BeginLogin(w http.ResponseWriter, r *http.Request) {
-
+func BeginLogin_base(w http.ResponseWriter, r *http.Request, opts ...webauthn.LoginOption) {
 	// get username
 	vars := mux.Vars(r)
 	username := vars["username"]
@@ -150,7 +156,7 @@ func BeginLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// generate PublicKeyCredentialRequestOptions, session data
-	options, sessionData, err := webAuthn.BeginLogin(user)
+	options, sessionData, err := webAuthn.BeginLogin(user, opts...)
 	if err != nil {
 		log.Println(err)
 		jsonResponse(w, err.Error(), http.StatusInternalServerError)
@@ -168,8 +174,13 @@ func BeginLogin(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, options, http.StatusOK)
 }
 
-func FinishLogin(w http.ResponseWriter, r *http.Request) {
+func BeginLogin(w http.ResponseWriter, r *http.Request) {
+	// No need for `LoginOption` for a regular login authorization
+	BeginLogin_base(w, r)
+	return
+}
 
+func FinishLogin(w http.ResponseWriter, r *http.Request) {
 	// get username
 	vars := mux.Vars(r)
 	username := vars["username"]
@@ -204,6 +215,49 @@ func FinishLogin(w http.ResponseWriter, r *http.Request) {
 
 	// handle successful login
 	jsonResponse(w, "Login Success", http.StatusOK)
+}
+
+type TxAuthnResponse struct {
+	SendAmount int `json:"sendAmount"`
+}
+
+func ParseTxAuthnResponse(response *http.Request) (*TxAuthnResponse, error) {
+	if response == nil || response.Body == nil {
+		return nil, protocol.ErrBadRequest.WithDetails("No response given")
+	}
+
+	var tar TxAuthnResponse
+	err := json.NewDecoder(response.Body).Decode(&tar)
+
+	return &tar, err
+}
+
+func BeginTxAuthn(w http.ResponseWriter, r *http.Request) {
+	// Parse the `TxAuthnResponse` from the web client
+	tar, err := ParseTxAuthnResponse(r)
+	if err != nil {
+		log.Println(err)
+		jsonResponse(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Set the transaction authentication extension
+	extensions := make(protocol.AuthenticationExtensions)
+	extensions["txAuthSimple"] = fmt.Sprintf("Authroize sending %d coins!", tar.SendAmount)
+
+	txauthnOption := func(req *protocol.PublicKeyCredentialRequestOptions) {
+		req.Extensions = extensions
+	}
+
+	// Pass the `txauthnOption` to the `BeginLogin_base`
+	BeginLogin_base(w, r, txauthnOption)
+	return
+}
+
+func FinishTxAuthn(w http.ResponseWriter, r *http.Request) {
+	// Transaction authentication finish is identical to the login
+	FinishLogin(w, r)
+	return
 }
 
 // from: https://github.com/duo-labs/webauthn.io/blob/3f03b482d21476f6b9fb82b2bf1458ff61a61d41/server/response.go#L15

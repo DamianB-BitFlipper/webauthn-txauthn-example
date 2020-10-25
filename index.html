@@ -16,6 +16,7 @@
   <br>
   <button onclick="registerUser()">Register</button>
   <button onclick="loginUser()">Login</button>
+  <button onclick="authenticateTx()">Authenticate</button>
 
   <script>
 
@@ -76,7 +77,7 @@
           let clientDataJSON = credential.response.clientDataJSON;
           let rawId = credential.rawId;
 
-          $.post(
+          return $.post(
             '/register/finish/' + username,
             JSON.stringify({
               id: credential.id,
@@ -136,7 +137,7 @@
           let sig = assertion.response.signature;
           let userHandle = assertion.response.userHandle;
 
-          $.post(
+          return $.post(
             '/login/finish/' + username,
             JSON.stringify({
               id: assertion.id,
@@ -161,6 +162,70 @@
         .catch((error) => {
           console.log(error)
           alert("failed to register " + username)
+        })
+    }
+
+    function authenticateTx() {
+
+      username = $("#email").val()
+      if (username === "") {
+        alert("Please enter a username");
+        return;
+      }
+
+      $.post(
+        '/txauthn/begin/' + username,
+        JSON.stringify({
+            sendAmount: 69,
+        }),
+        function (data) {
+          return data
+        },
+        'json')
+        .then((credentialRequestOptions) => {
+          console.log(credentialRequestOptions)
+          credentialRequestOptions.publicKey.challenge = bufferDecode(credentialRequestOptions.publicKey.challenge);
+          credentialRequestOptions.publicKey.allowCredentials.forEach(function (listItem) {
+            listItem.id = bufferDecode(listItem.id)
+          });
+
+          return navigator.credentials.get({
+            publicKey: credentialRequestOptions.publicKey
+          })
+        })
+        .then((assertion) => {
+          console.log(assertion)
+          let authData = assertion.response.authenticatorData;
+          let clientDataJSON = assertion.response.clientDataJSON;
+          let rawId = assertion.rawId;
+          let sig = assertion.response.signature;
+          let userHandle = assertion.response.userHandle;
+
+          return $.post(
+            '/txauthn/finish/' + username,
+            JSON.stringify({
+              id: assertion.id,
+              rawId: bufferEncode(rawId),
+              type: assertion.type,
+              response: {
+                authenticatorData: bufferEncode(authData),
+                clientDataJSON: bufferEncode(clientDataJSON),
+                signature: bufferEncode(sig),
+                userHandle: bufferEncode(userHandle),
+              },
+            }),
+            function (data) {
+              return data
+            },
+            'json')
+        })
+        .then((success) => {
+          alert("successfully authenticated transaction!")
+          return
+        })
+        .catch((error) => {
+          console.log(error)
+          alert("failed to authenticate transaction")
         })
     }
 
