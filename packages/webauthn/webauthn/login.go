@@ -21,7 +21,7 @@ type LoginOption func(*protocol.PublicKeyCredentialRequestOptions)
 // additional LoginOption parameters. This function also returns sessionData, that must be stored by the
 // RP in a secure manner and then provided to the FinishLogin function. This data helps us verify the
 // ownership of the credential being retreived.
-func (webauthn *WebAuthn) BeginLogin(user User, opts ...LoginOption) (*protocol.CredentialAssertion, *SessionData, error) {
+func (webauthn *WebAuthn) BeginLogin(user User, clientExtensions *protocol.AuthenticationExtensions, opts ...LoginOption) (*protocol.CredentialAssertion, *SessionData, error) {
 	challenge, err := protocol.CreateChallenge()
 	if err != nil {
 		return nil, nil, err
@@ -61,6 +61,11 @@ func (webauthn *WebAuthn) BeginLogin(user User, opts ...LoginOption) (*protocol.
 		UserVerification:     requestOptions.UserVerification,
 	}
 
+	// Assign the `Clientextensions` data if it exists
+	if clientExtensions != nil {
+		newSessionData.ClientExtensions = *clientExtensions
+	}
+
 	response := protocol.CredentialAssertion{requestOptions}
 
 	return &response, &newSessionData, nil
@@ -89,17 +94,17 @@ func WithAssertionExtensions(extensions protocol.AuthenticationExtensions) Login
 }
 
 // Take the response from the client and validate it against the user credentials and stored session data
-func (webauthn *WebAuthn) FinishLogin(user User, session SessionData, response *http.Request) (*Credential, error) {
+func (webauthn *WebAuthn) FinishLogin(user User, session SessionData, extensionsVerifier protocol.ExtensionsVerifier, response *http.Request) (*Credential, error) {
 	parsedResponse, err := protocol.ParseCredentialRequestResponse(response)
 	if err != nil {
 		return nil, err
 	}
 
-	return webauthn.ValidateLogin(user, session, parsedResponse)
+	return webauthn.ValidateLogin(user, session, extensionsVerifier, parsedResponse)
 }
 
 // ValidateLogin takes a parsed response and validates it against the user credentials and session data
-func (webauthn *WebAuthn) ValidateLogin(user User, session SessionData, parsedResponse *protocol.ParsedCredentialAssertionData) (*Credential, error) {
+func (webauthn *WebAuthn) ValidateLogin(user User, session SessionData, extensionsVerifier protocol.ExtensionsVerifier, parsedResponse *protocol.ParsedCredentialAssertionData) (*Credential, error) {
 	if !bytes.Equal(user.WebAuthnID(), session.UserID) {
 		return nil, protocol.ErrBadRequest.WithDetails("ID mismatch for User and Session")
 	}
@@ -170,7 +175,11 @@ func (webauthn *WebAuthn) ValidateLogin(user User, session SessionData, parsedRe
 	rpOrigin := webauthn.Config.RPOrigin
 
 	// Handle steps 4 through 16
-	validError := parsedResponse.Verify(session.Challenge, rpID, rpOrigin, shouldVerifyUser, loginCredential.PublicKey)
+	validError := parsedResponse.Verify(
+		session.Challenge, session.ClientExtensions, extensionsVerifier,
+		rpID, rpOrigin, shouldVerifyUser, loginCredential.PublicKey,
+	)
+
 	if validError != nil {
 		return nil, validError
 	}

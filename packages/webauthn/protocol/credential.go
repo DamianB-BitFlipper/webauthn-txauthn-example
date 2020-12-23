@@ -103,7 +103,7 @@ func ParseCredentialCreationResponseBody(body io.Reader) (*ParsedCredentialCreat
 func (pcc *ParsedCredentialCreationData) Verify(storedChallenge string, verifyUser bool, relyingPartyID, relyingPartyOrigin string) error {
 
 	// Handles steps 3 through 6 - Verifying the Client Data against the Relying Party's stored data
-	verifyError := pcc.Response.CollectedClientData.Verify(storedChallenge, CreateCeremony, relyingPartyOrigin)
+	verifyError := pcc.Response.CollectedClientData.Verify(storedChallenge, nil, nil, CreateCeremony, relyingPartyOrigin)
 	if verifyError != nil {
 		return verifyError
 	}

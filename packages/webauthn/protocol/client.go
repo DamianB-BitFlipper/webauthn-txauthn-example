@@ -15,10 +15,11 @@ type CollectedClientData struct {
 	// and "webauthn.get" when getting an assertion from an existing credential. The
 	// purpose of this member is to prevent certain types of signature confusion attacks
 	//(where an attacker substitutes one legitimate signature for another).
-	Type         CeremonyType  `json:"type"`
-	Challenge    string        `json:"challenge"`
-	Origin       string        `json:"origin"`
-	TokenBinding *TokenBinding `json:"tokenBinding,omitempty"`
+	Type             CeremonyType             `json:"type"`
+	Challenge        string                   `json:"challenge"`
+	Origin           string                   `json:"origin"`
+	TokenBinding     *TokenBinding            `json:"tokenBinding,omitempty"`
+	ClientExtensions AuthenticationExtensions `json:"clientExtensions,omitempty"`
 	// Chromium (Chrome) returns a hint sometimes about how to handle clientDataJSON in a safe manner
 	Hint string `json:"new_keys_may_be_added_here,omitempty"`
 }
@@ -58,7 +59,12 @@ func FullyQualifiedOrigin(u *url.URL) string {
 // new credential and steps 7 through 10 of verifying an authentication assertion
 // See https://www.w3.org/TR/webauthn/#registering-a-new-credential
 // and https://www.w3.org/TR/webauthn/#verifying-assertion
-func (c *CollectedClientData) Verify(storedChallenge string, ceremony CeremonyType, relyingPartyOrigin string) error {
+func (c *CollectedClientData) Verify(
+	storedChallenge string,
+	storedClientExtensions *AuthenticationExtensions,
+	extensionsVerifier *ExtensionsVerifier,
+	ceremony CeremonyType,
+	relyingPartyOrigin string) error {
 
 	// Registration Step 3. Verify that the value of C.type is webauthn.create.
 
@@ -77,9 +83,19 @@ func (c *CollectedClientData) Verify(storedChallenge string, ceremony CeremonyTy
 	// passed to the get() call.
 
 	challenge := c.Challenge
-	if 0 != strings.Compare(storedChallenge, challenge) {
+	if strings.Compare(storedChallenge, challenge) != 0 {
 		err := ErrVerification.WithDetails("Error validating challenge")
 		return err.WithInfo(fmt.Sprintf("Expected b Value: %#v\nReceived b: %#v\n", storedChallenge, challenge))
+	}
+
+	// TODO: Should these be pointers? Because of credential creation does not use extensions
+	if storedClientExtensions != nil && extensionsVerifier != nil {
+		// TODO: What is the result of this if `c` does not contain a `ClientExtensions`
+		clientExtensions := c.ClientExtensions
+		if !(*extensionsVerifier)(*storedClientExtensions, clientExtensions) {
+			err := ErrVerification.WithDetails("Error validating client extensions")
+			return err.WithInfo(fmt.Sprintf("Expected Value: %+v\nReceived Value: %+v\n", storedClientExtensions, clientExtensions))
+		}
 	}
 
 	// Registration Step 5 & Assertion Step 9. Verify that the value of C.origin matches

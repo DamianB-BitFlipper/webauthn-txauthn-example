@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/duo-labs/webauthn.io/session"
@@ -140,7 +141,7 @@ func FinishRegistration(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, "Registration Success", http.StatusOK)
 }
 
-func BeginLogin_base(w http.ResponseWriter, r *http.Request, opts ...webauthn.LoginOption) {
+func BeginLogin_base(w http.ResponseWriter, r *http.Request, clientExtensions *protocol.AuthenticationExtensions, opts ...webauthn.LoginOption) {
 	// get username
 	vars := mux.Vars(r)
 	username := vars["username"]
@@ -156,7 +157,7 @@ func BeginLogin_base(w http.ResponseWriter, r *http.Request, opts ...webauthn.Lo
 	}
 
 	// generate PublicKeyCredentialRequestOptions, session data
-	options, sessionData, err := webAuthn.BeginLogin(user, opts...)
+	options, sessionData, err := webAuthn.BeginLogin(user, clientExtensions, opts...)
 	if err != nil {
 		log.Println(err)
 		jsonResponse(w, err.Error(), http.StatusInternalServerError)
@@ -176,11 +177,11 @@ func BeginLogin_base(w http.ResponseWriter, r *http.Request, opts ...webauthn.Lo
 
 func BeginLogin(w http.ResponseWriter, r *http.Request) {
 	// No need for `LoginOption` for a regular login authorization
-	BeginLogin_base(w, r)
+	BeginLogin_base(w, r, nil)
 	return
 }
 
-func FinishLogin(w http.ResponseWriter, r *http.Request) {
+func FinishLogin_base(w http.ResponseWriter, r *http.Request, extensionsVerifier protocol.ExtensionsVerifier) {
 	// get username
 	vars := mux.Vars(r)
 	username := vars["username"]
@@ -206,7 +207,7 @@ func FinishLogin(w http.ResponseWriter, r *http.Request) {
 	// in an actual implementation, we should perform additional checks on
 	// the returned 'credential', i.e. check 'credential.Authenticator.CloneWarning'
 	// and then increment the credentials counter
-	_, err = webAuthn.FinishLogin(user, sessionData, r)
+	_, err = webAuthn.FinishLogin(user, sessionData, extensionsVerifier, r)
 	if err != nil {
 		log.Println(err)
 		jsonResponse(w, err.Error(), http.StatusBadRequest)
@@ -215,6 +216,16 @@ func FinishLogin(w http.ResponseWriter, r *http.Request) {
 
 	// handle successful login
 	jsonResponse(w, "Login Success", http.StatusOK)
+}
+
+func FinishLogin(w http.ResponseWriter, r *http.Request) {
+	var noVerify protocol.ExtensionsVerifier = func(_, _ protocol.AuthenticationExtensions) bool {
+		return true
+	}
+
+	// No need for `LoginOption` for a regular login authorization
+	FinishLogin_base(w, r, noVerify)
+	return
 }
 
 type TxAuthnResponse struct {
@@ -243,20 +254,25 @@ func BeginTxAuthn(w http.ResponseWriter, r *http.Request) {
 
 	// Set the transaction authentication extension
 	extensions := make(protocol.AuthenticationExtensions)
-	extensions["txAuthSimple"] = fmt.Sprintf("Authroize sending %d coins!", tar.SendAmount)
+	extensions["txAuthSimple"] = fmt.Sprintf("Authorize sending %d coins!", tar.SendAmount)
 
 	txauthnOption := func(req *protocol.PublicKeyCredentialRequestOptions) {
 		req.Extensions = extensions
 	}
 
 	// Pass the `txauthnOption` to the `BeginLogin_base`
-	BeginLogin_base(w, r, txauthnOption)
+	BeginLogin_base(w, r, &extensions, txauthnOption)
 	return
 }
 
 func FinishTxAuthn(w http.ResponseWriter, r *http.Request) {
+	var verifyTxAuthSimple protocol.ExtensionsVerifier = func(sessionExtensions, clientDataExtensions protocol.AuthenticationExtensions) bool {
+		fmt.Printf("Session: %v \nclientData: %v\n", sessionExtensions, clientDataExtensions)
+		return reflect.DeepEqual(sessionExtensions, clientDataExtensions)
+	}
+
 	// Transaction authentication finish is identical to the login
-	FinishLogin(w, r)
+	FinishLogin_base(w, r, verifyTxAuthSimple)
 	return
 }
 

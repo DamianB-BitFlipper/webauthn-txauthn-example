@@ -77,6 +77,9 @@ const (
 // This is currently under development
 type AuthenticationExtensions map[string]interface{}
 
+// `ExtensionsVerifier` is used to check the validity of `protocol.AuthenticationExtensions`
+type ExtensionsVerifier func(AuthenticationExtensions, AuthenticationExtensions) bool
+
 // WebAuthn Relying Parties may use the AuthenticatorSelectionCriteria dictionary to specify their requirements
 // regarding authenticator attributes. See §5.4.4. Authenticator Selection Criteria
 // https://www.w3.org/TR/webauthn/#authenticatorSelection
